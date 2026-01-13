@@ -1,0 +1,24 @@
+dataset:
+  name: "flickr8k_mini"
+  path: "./data"
+  train_size: 750
+  val_size: 150
+  test_size: 150
+  img_size: 224
+
+encoders:
+  - resnet50
+  - resnet101
+  - efficientnet_b0
+  - efficientnet_b4
+  - vit_base_patch16_224
+
+evaluation:
+  batch_size: 32
+  num_workers: 4
+  device: "cuda"
+  
+metrics:
+  compute_time: true
+  memory_usage: true
+  feature_statistics: true
