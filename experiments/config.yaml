@@ -1,6 +1,6 @@
 dataset:
   name: "flickr8k_mini"
-  path: "./data"
+  path: "../data"
   train_size: 750
   val_size: 150
   test_size: 150
