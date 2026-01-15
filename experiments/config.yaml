@@ -1,10 +1,16 @@
 dataset:
-  name: "flickr8k_mini"
-  path: "../data"
-  train_size: 750
-  val_size: 150
-  test_size: 150
-  img_size: 224
+  data_path: "../data"
+  images_path: "images"
+  captions_file: "captions.txt"
+  train_size: 0.8
+  val_size: 0.1
+  test_size: 0.1
+  max_caption_length: 50
+  min_word_freq: 2
+  remove_stopwords: true
+  image_size: 224
+  normalize_mean: [0.4463, 0.4506, 0.4166]
+  normalize_std: [0.2235, 0.2138, 0.2222]
 
 encoders:
   - resnet50
@@ -15,8 +21,12 @@ encoders:
 evaluation:
   batch_size: 32
   num_workers: 4
+
+hardware:
   device: "cuda"
-  
+  num_workers: 4
+  pin_memory: true
+
 metrics:
   compute_time: true
   memory_usage: true
