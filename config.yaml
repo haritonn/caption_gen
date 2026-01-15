@@ -1,0 +1,149 @@
+dataset:
+  data_path: "./data"
+  images_path: "images"
+  captions_file: "captions.txt"
+
+  train_size: 0.8
+  val_size: 0.1
+  test_size: 0.1
+
+  max_caption_length: 50
+  min_word_freq: 2
+  remove_stopwords: true
+
+  image_size: 224
+  normalize_mean: [0.4463, 0.4506, 0.4166]
+  normalize_std: [0.2235, 0.2138, 0.2222]
+
+  augmentation:
+    random_horizontal_flip: 0.5
+    random_rotation: 0
+    random_brightness: 0
+    random_contrast: 0
+    random_saturation: 0
+    random_hue: 0
+
+model:
+  encoder:
+    name: "resnet50"  # Options: resnet50, resnet101, efficientnet_b0, efficientnet_b4 
+    pretrained: true
+    freeze_layers: true
+    feature_dim: 2048
+    dropout: 0.5
+
+  decoder:
+    type: "lstm"
+    hidden_dim: 512
+    num_layers: 2
+    embedding_dim: 256
+    dropout: 0.5
+    attention: true
+
+  transformer:
+    num_heads: 8
+    num_layers: 6
+    d_model: 512
+    d_ff: 2048
+    max_seq_length: 100
+
+training:
+  batch_size: 32
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  num_epochs: 50
+
+  optimizer: "adam"
+  scheduler: "step"  # Options: step, cosine, plateau, exponential
+  step_size: 10
+  gamma: 0.5
+
+  loss_function: "cross_entropy"
+  label_smoothing: 0.1
+
+  gradient_clipping: 5.0
+  accumulate_grad_batches: 1
+
+  early_stopping:
+    enabled: true
+    patience: 10
+    monitor: "val_loss"
+    min_delta: 0.001
+    mode: "min"
+
+  save_checkpoints: true
+  checkpoint_dir: "./checkpoints"
+  save_every_n_epochs: 5
+  save_best_only: true
+
+evaluation:
+  batch_size: 64
+  num_workers: 4
+
+  metrics:
+    bleu: true
+    rouge: true
+    meteor: true
+    cider: true
+    spice: true
+    bertscore: true
+
+  beam_search:
+    enabled: true
+    beam_width: 3
+    max_length: 50
+
+  temperature: 1.0
+  top_k: 0
+  top_p: 1.0
+
+hardware:
+  device: "cuda"
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+
+  mixed_precision: true
+
+  gradient_checkpointing: false
+  find_unused_parameters: false
+
+  experiment_tracking:
+    enabled: true
+    backend: "clearml"
+    project_name: "image_caption_generator"
+    experiment_name: null  # Will use project.experiment_name if null
+
+  log_every_n_steps: 100
+  val_check_interval: 1.0
+  log_hyperparameters: true
+  log_model_architecture: true
+  log_gradients: false
+  log_weights: false
+
+data_loading:
+  batch_size: 32
+  num_workers: 4
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+  max_length: 50
+  temperature: 1.0
+  do_sample: false
+  num_beams: 3
+  early_stopping: true
+
+  remove_special_tokens: true
+  clean_up_tokenization_spaces: true
+
+reproducibility:
+  seed: 42
+  deterministic: true
+  benchmark: false
+
+paths:
+  data_dir: "./data"
+  model_dir: "./model"
+  checkpoint_dir: "./checkpoints"
