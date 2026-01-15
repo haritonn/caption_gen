@@ -12,3 +12,4 @@ wheels/
 # Other
 */.ipynb_checkpoints
 data/*
+checkpoints/*
