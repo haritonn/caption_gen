@@ -13,3 +13,4 @@ wheels/
 */.ipynb_checkpoints
 data/*
 checkpoints/*
+.coverage
