@@ -1,6 +1,6 @@
 import os
 from PIL import Image
-from torchvision.transform import v2
+from torchvision.transforms import v2
 
 def get_image_by_name(data_path, images_path, name, transform=None):
     image_path = os.path.join(data_path, images_path, name)
