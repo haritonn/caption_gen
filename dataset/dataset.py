@@ -103,18 +103,12 @@ class FlickrDataset(Dataset):
 
     def __getitem__(self, idx):
         image_name, caption_text = self.dataset_items[idx]
-
-        try:
-            image = get_image_by_name(
-                self.data_path,
-                self.images_path,
-                image_name,
-                transform=self.transform
-            )
-        except Exception as e:
-            print(f"Warning: Could not load image {image_name}. Using dummy image. Error: {e}")
-            dummy_image = Image.new('RGB', (224, 224), color='black')
-            image = self.transform(dummy_image) if self.transform else dummy_image
+        image = get_image_by_name(
+            self.data_path,
+            self.images_path,
+            image_name,
+            transform=self.transform
+        )
 
         caption_indices = self._caption_to_indices(caption_text)
         caption_length = len(caption_indices)
