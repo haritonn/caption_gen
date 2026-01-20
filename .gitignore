@@ -14,3 +14,6 @@ wheels/
 data/*
 checkpoints/*
 .coverage
+.python-version
+.pre-commit-config.yaml
+.pytest_cache/
