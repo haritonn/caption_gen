@@ -43,7 +43,7 @@ class TestCaptionDecoder:
         h0 = torch.zeros(2, 1, 130)
         c0 = torch.zeros(2, 1, 130)
         
-        output, _ = decoder(text, (h0, c0, (h0, c0)))
+        output, _ = decoder(text, (h0, c0))
         assert output.shape == (1, self.SEQ_LEN, 8)
         assert output.dtype == torch.float32
     
