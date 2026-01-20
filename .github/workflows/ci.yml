@@ -27,7 +27,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install torch==2.5.1+cpu torchvision==0.20.1+cpu --index-url https://download.pytorch.org/whl/cpu
+          pip install pillow numpy filelock typing-extensions networkx jinja2 fsspec sympy
+          pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu --no-deps --default-timeout=100
           pip install -r requirements.txt
           pip install pytest pytest-cov
 
@@ -39,7 +40,8 @@ jobs:
 
       - name: Download NLTK data
         run: |
-          python -c "import nltk; nltk.download('popular', quiet=True)"
+          python -c "import nltk; nltk.download('stopwords', quiet=True)"
+          python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
       - name: Run tests
         run: pytest tests/ -v --cov=src --cov-report=term-missing
