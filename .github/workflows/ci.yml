@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Cache pip packages
         uses: actions/cache@v3
@@ -39,8 +39,7 @@ jobs:
 
       - name: Download NLTK data
         run: |
-          python -c "import nltk; nltk.download('stopwords', quiet=True)"
-          python -c "import nltk; nltk.download('punkt', quiet=True)"
+          python -c "import nltk; nltk.download("popular", quiet=True)"
 
       - name: Run tests
         run: pytest tests/ -v --cov=src --cov-report=term-missing
