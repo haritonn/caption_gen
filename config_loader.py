@@ -1,7 +1,8 @@
-import yaml
-import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+import yaml
+
 
 class ConfigLoader:
     def __init__(self, config_path: Optional[str] = None):
@@ -11,7 +12,7 @@ class ConfigLoader:
                 current_dir / "config.yaml",
                 current_dir.parent / "config.yaml",
                 Path(__file__).parent / "config.yaml",
-                Path(__file__).parent.parent / "config.yaml"
+                Path(__file__).parent.parent / "config.yaml",
             ]
 
             config_path = None
@@ -21,15 +22,28 @@ class ConfigLoader:
                     break
 
             if config_path is None:
-                raise FileNotFoundError("config.yaml not found in any of the expected locations")
+                raise FileNotFoundError(
+                    "config.yaml not found in any of the expected locations"
+                )
 
         self.config_path = config_path
         self.config = self._load_config()
 
     def _load_config(self) -> Dict[str, Any]:
+        # if no CUDA, replacing default device to 'cpu' (mostly for CI)
         try:
-            with open(self.config_path, 'r') as file:
-                return yaml.safe_load(file)
+            with open(self.config_path, "r") as file:
+                config = yaml.safe_load(file)
+            if "hardware" in config and config["hardware"].get("device") == "cuda":
+                try:
+                    import torch
+
+                    if not torch.cuda.is_available():
+                        config["hardware"]["device"] = "cpu"
+                        config["hardware"]["mixed_precision"] = False
+                except ImportError:
+                    pass
+            return config
         except FileNotFoundError:
             raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
         except yaml.YAMLError as e:
@@ -39,34 +53,34 @@ class ConfigLoader:
         return self.config
 
     def get_project_config(self) -> Dict[str, Any]:
-        return self.config.get('project', {})
+        return self.config.get("project", {})
 
     def get_dataset_config(self) -> Dict[str, Any]:
-        return self.config.get('dataset', {})
+        return self.config.get("dataset", {})
 
     def get_model_config(self) -> Dict[str, Any]:
-        return self.config.get('model', {})
+        return self.config.get("model", {})
 
     def get_training_config(self) -> Dict[str, Any]:
-        return self.config.get('training', {})
+        return self.config.get("training", {})
 
     def get_evaluation_config(self) -> Dict[str, Any]:
-        return self.config.get('evaluation', {})
+        return self.config.get("evaluation", {})
 
     def get_hardware_config(self) -> Dict[str, Any]:
-        return self.config.get('hardware', {})
+        return self.config.get("hardware", {})
 
     def get_data_loading_config(self) -> Dict[str, Any]:
-        return self.config.get('data_loading', {})
+        return self.config.get("data_loading", {})
 
     def get_reproducibility_config(self) -> Dict[str, Any]:
-        return self.config.get('reproducibility', {})
+        return self.config.get("reproducibility", {})
 
     def get_paths_config(self) -> Dict[str, Any]:
-        return self.config.get('paths', {})
+        return self.config.get("paths", {})
 
     def get(self, key: str, default: Any = None) -> Any:
-        keys = key.split('.')
+        keys = key.split(".")
         value = self.config
 
         for k in keys:
@@ -77,13 +91,16 @@ class ConfigLoader:
 
         return value
 
+
 _config_loader = None
+
 
 def get_config(config_path: Optional[str] = None) -> ConfigLoader:
     global _config_loader
     if _config_loader is None or config_path is not None:
         _config_loader = ConfigLoader(config_path)
     return _config_loader
+
 
 def reload_config(config_path: Optional[str] = None):
     global _config_loader
