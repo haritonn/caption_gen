@@ -25,7 +25,7 @@ dataset:
 
 model:
   encoder:
-    name: "resnet50"  # Options: resnet50, resnet101, efficientnet_b0, efficientnet_b4 
+    name: "resnet50"  # Options: resnet50, resnet101, efficientnet_b0, efficientnet_b4
     pretrained: true
     freeze_layers: true
     feature_dim: 2048
@@ -98,7 +98,7 @@ evaluation:
 
 hardware:
   device: "cuda"
-  num_workers: 4
+  num_workers: -1
   pin_memory: true
   persistent_workers: true
 
