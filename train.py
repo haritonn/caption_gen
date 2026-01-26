@@ -117,8 +117,9 @@ def setup_model(config, vocab_size, device):
     return model
 
 
-def setup_training_components(config, model):
-    criterion = nn.CrossEntropyLoss(ignore_index=0)  # Assuming PAD token is 0
+def setup_training_components(config, model, word2idx):
+    pad_idx = word2idx.get("<PAD>", 0)
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
 
     lr = config.get("training.learning_rate", 1e-4)
     weight_decay = config.get("training.weight_decay", 1e-4)
@@ -134,7 +135,7 @@ def setup_training_components(config, model):
     scheduler = None
 
     if scheduler_type == "step":
-        step_size = config.get("training.step_size", 10)
+        step_size = config.get("training.step_size", 25)
         gamma = config.get("training.gamma", 0.5)
         scheduler = optim.lr_scheduler.StepLR(
             optimizer, step_size=step_size, gamma=gamma
@@ -203,10 +204,41 @@ def calculate_meteor_score(predictions, targets, idx2word, pad_idx, start_idx, e
             target_words = target_words[:end_idx_pos]
 
         if pred_words and target_words:
-            score = meteor_score([" ".join(target_words)], " ".join(pred_words))
-            meteor_scores.append(score)
+            try:
+                score = meteor_score([target_words], pred_words)
+                meteor_scores.append(score)
+            except Exception:
+                continue
 
-    return np.mean(meteor_scores)
+    return np.mean(meteor_scores) if meteor_scores else 0.0
+
+
+def print_sample_predictions(predictions, targets, idx2word, word2idx, num_samples=3):
+    """Print sample predictions for debugging"""
+    pad_idx = word2idx.get("<PAD>", 0)
+    start_idx = word2idx.get("<START>", 1)
+    end_idx = word2idx.get("<END>", 2)
+
+    print("\n--- Sample Predictions ---")
+    for i in range(min(num_samples, len(predictions))):
+        pred_words = []
+        true_words = []
+
+        for idx in predictions[i]:
+            if idx == pad_idx or idx == end_idx:
+                break
+            if idx != start_idx:
+                pred_words.append(idx2word.get(idx, "<UNK>"))
+
+        for idx in targets[i]:
+            if idx == pad_idx or idx == end_idx:
+                break
+            if idx != start_idx:
+                true_words.append(idx2word.get(idx, "<UNK>"))
+
+        print(f"Pred {i + 1}: {' '.join(pred_words)}")
+        print(f"True {i + 1}: {' '.join(true_words)}")
+        print()
 
 
 def train_epoch(
@@ -219,13 +251,27 @@ def train_epoch(
     for batch_idx, batch in enumerate(progress_bar):
         images = batch["images"].to(device)
         captions = batch["captions"].to(device)
+        caption_lengths = batch["caption_lengths"].to(device)
 
         optimizer.zero_grad()
 
-        outputs = model(images, captions)
-        targets = captions[:, 1:]
+        predictions, encoded_captions, decode_lengths, alphas, sort_ind = model(
+            images, captions, caption_lengths
+        )
 
-        loss = criterion(outputs.reshape(-1, outputs.size(-1)), targets.reshape(-1))
+        # Calculate loss
+        targets = encoded_captions[:, 1:]
+
+        # Pack padded sequences for efficient computation
+        predictions = torch.cat(
+            [predictions[i, : decode_lengths[i]] for i in range(len(decode_lengths))],
+            dim=0,
+        )
+        targets = torch.cat(
+            [targets[i, : decode_lengths[i]] for i in range(len(decode_lengths))], dim=0
+        )
+
+        loss = criterion(predictions, targets)
         loss.backward()
 
         if config.get("training.gradient_clipping", 0) > 0:
@@ -262,15 +308,30 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
         for batch in tqdm(val_loader, desc="Validation"):
             images = batch["images"].to(device)
             captions = batch["captions"].to(device)
+            caption_lengths = batch["caption_lengths"].to(device)
 
-            outputs = model(images, captions)
-            targets = captions[:, 1:]
+            predictions, encoded_captions, decode_lengths, alphas, sort_ind = model(
+                images, captions, caption_lengths
+            )
 
-            loss = criterion(outputs.reshape(-1, outputs.size(-1)), targets.reshape(-1))
+            targets = encoded_captions[:, 1:]
+            pred_packed = torch.cat(
+                [
+                    predictions[i, : decode_lengths[i]]
+                    for i in range(len(decode_lengths))
+                ],
+                dim=0,
+            )
+            targets_packed = torch.cat(
+                [targets[i, : decode_lengths[i]] for i in range(len(decode_lengths))],
+                dim=0,
+            )
+
+            loss = criterion(pred_packed, targets_packed)
             total_loss += loss.item()
 
-            predictions = torch.argmax(outputs, dim=-1)
-            all_predictions.extend(predictions.cpu().numpy())
+            pred_words = torch.argmax(predictions, dim=-1)
+            all_predictions.extend(pred_words.cpu().numpy())
             all_targets.extend(targets.cpu().numpy())
 
     avg_loss = total_loss / len(val_loader)
@@ -278,6 +339,9 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
     pad_idx = word2idx.get("<PAD>", 0)
     start_idx = word2idx.get("<START>", 1)
     end_idx = word2idx.get("<END>", 2)
+
+    if len(all_predictions) > 0:
+        print_sample_predictions(all_predictions, all_targets, idx2word, word2idx)
 
     bleu_score = calculate_bleu_score(
         all_predictions, all_targets, idx2word, pad_idx, start_idx, end_idx
@@ -426,7 +490,7 @@ def main():
     idx2word = dataset.get_idx2word()
 
     model = setup_model(config, vocab_size, device)
-    criterion, optimizer, scheduler = setup_training_components(config, model)
+    criterion, optimizer, scheduler = setup_training_components(config, model, word2idx)
 
     if clearml_logger and config.get(
         "hardware.experiment_tracking.log_model_architecture", True
