@@ -314,14 +314,12 @@ def apply_repetition_penalty(logits, generated_tokens, penalty=1.2):
     if len(generated_tokens) == 0:
         return logits
 
-    # Count occurrences of each token
     token_counts = {}
     for token in generated_tokens:
         token_counts[token] = token_counts.get(token, 0) + 1
 
-    # Apply penalty
     for token, count in token_counts.items():
-        if token < logits.size(-1):  # Ensure token is in vocab
+        if token < logits.size(-1):
             logits[token] = logits[token] / (penalty**count)
 
     return logits
@@ -440,11 +438,12 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx, con
             loss = criterion(pred_packed, targets_packed)
             total_loss += loss.item()
 
+            images_sorted = images[sort_ind]
             # Generate predictions with repetition penalty for better metrics
             if config.get("evaluation.repetition_penalty.enabled", True):
                 penalty = config.get("evaluation.repetition_penalty.penalty", 1.3)
                 rep_penalty_preds = generate_with_repetition_penalty(
-                    model, images, word2idx, idx2word, device, penalty=penalty
+                    model, images_sorted, word2idx, idx2word, device, penalty=penalty
                 )
                 # Clean up consecutive repeats if enabled
                 if config.get("evaluation.repetition_penalty.remove_consecutive", True):
