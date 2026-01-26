@@ -245,15 +245,7 @@ def print_sample_predictions(predictions, targets, idx2word, word2idx, num_sampl
 
 
 def train_epoch(
-    model,
-    train_loader,
-    criterion,
-    optimizer,
-    config,
-    device,
-    clearml_logger,
-    epoch,
-    word2idx,
+    model, train_loader, criterion, optimizer, config, device, clearml_logger, epoch
 ):
     model.train()
     total_loss = 0
@@ -291,30 +283,6 @@ def train_epoch(
             alpha_loss = attention_reg * torch.mean(torch.sum(alphas**2, dim=-1))
             loss = loss + alpha_loss
 
-        # Add repetition penalty to reduce repetitive generation
-        if config.get("training.repetition_penalty", 0.02) > 0:
-            rep_penalty = config.get("training.repetition_penalty", 0.02)
-            pad_idx = word2idx.get("<PAD>", 0)
-            start_idx = word2idx.get("<START>", 1)
-            end_idx = word2idx.get("<END>", 2)
-
-            # Calculate repetition loss based on consecutive repeated tokens
-            repetition_loss = 0.0
-            for i in range(len(decode_lengths)):
-                seq_len = decode_lengths[i]
-                if seq_len > 1:
-                    pred_seq = torch.argmax(predictions[i, :seq_len], dim=-1)
-                    # Penalize consecutive identical tokens
-                    for j in range(1, seq_len):
-                        if pred_seq[j] == pred_seq[j - 1] and pred_seq[j] not in [
-                            pad_idx,
-                            start_idx,
-                            end_idx,
-                        ]:
-                            repetition_loss += rep_penalty
-
-            if repetition_loss > 0:
-                loss = loss + repetition_loss
         loss.backward()
 
         if config.get("training.gradient_clipping", 0) > 0:
@@ -576,7 +544,6 @@ def main():
             device,
             clearml_logger,
             epoch,
-            word2idx,
         )
         val_loss, bleu_score, meteor_score_val = validate_epoch(
             model, val_loader, criterion, device, idx2word, word2idx
