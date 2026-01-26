@@ -62,12 +62,12 @@ training:
 
   gradient_clipping: 5.0
   accumulate_grad_batches: 1
-  attention_regularization: 0.01
+  attention_regularization: 0.001
 
   # Advanced training techniques
-  use_focal_loss: true
-  max_sampling_prob: 0.25
-  curriculum_learning: true
+  use_focal_loss: false
+  max_sampling_prob: 0.5
+  curriculum_learning: false
   token_frequency_weighting: true
 
   early_stopping:
@@ -103,9 +103,11 @@ evaluation:
     max_length: 50
 
   repetition_penalty:
-    enabled: true
+    enabled: false
     penalty: 1.3
     remove_consecutive: true
+
+  use_greedy: true
 
   temperature: 1.0
   top_k: 0

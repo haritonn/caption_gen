@@ -295,8 +295,8 @@ def train_epoch(
 ):
     model.train()
     total_loss = 0
-    sampling_prob = config.get("training.max_sampling_prob", 0.25) * (
-        epoch / total_epochs
+    sampling_prob = config.get("training.max_sampling_prob", 0.5) * min(
+        1.0, (epoch / 10) ** 0.5
     )
 
     progress_bar = tqdm(train_loader, desc="Training")
@@ -326,17 +326,6 @@ def train_epoch(
             attention_reg = config.get("training.attention_regularization", 0.01)
             alpha_loss = attention_reg * torch.mean(torch.sum(alphas**2, dim=-1))
             loss = loss + alpha_loss
-
-        # Curriculum learning
-        curriculum_weight = 1.0
-        if config.get("training.curriculum_learning", True):
-            avg_length = sum(decode_lengths) / len(decode_lengths)
-            max_length = max(decode_lengths)
-            difficulty = avg_length / max_length
-            curriculum_weight = min(
-                1.0, 0.5 + (epoch / total_epochs) * 0.5 + difficulty * 0.2
-            )
-            loss = loss * curriculum_weight
 
         loss.backward()
 
@@ -482,12 +471,17 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx, con
             total_loss += loss.item()
 
             images_sorted = images[sort_ind]
-            if config.get("evaluation.repetition_penalty.enabled", True):
+            if config.get("evaluation.use_greedy", True):
+                pred_words = torch.argmax(predictions, dim=-1)
+                # Restore original order before extending
+                pred_words_restored = pred_words.new_zeros(pred_words.shape)
+                pred_words_restored[sort_ind] = pred_words
+                all_predictions.extend(pred_words_restored.cpu().numpy())
+            elif config.get("evaluation.repetition_penalty.enabled", False):
                 penalty = config.get("evaluation.repetition_penalty.penalty", 1.3)
                 rep_penalty_preds = generate_with_repetition_penalty(
                     model, images_sorted, word2idx, idx2word, device, penalty=penalty
                 )
-                # Clean up consecutive repeats if enabled
                 if config.get("evaluation.repetition_penalty.remove_consecutive", True):
                     cleaned_preds = [
                         remove_consecutive_repeats(pred, word2idx)
@@ -500,7 +494,9 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx, con
                 pred_words = torch.argmax(predictions, dim=-1)
                 all_predictions.extend(pred_words.cpu().numpy())
 
-            all_targets.extend(targets.cpu().numpy())
+            targets_restored = targets.new_zeros(targets.shape)
+            targets_restored[sort_ind] = targets
+            all_targets.extend(targets_restored.cpu().numpy())
 
     avg_loss = total_loss / len(val_loader)
 
