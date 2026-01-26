@@ -48,7 +48,7 @@ model:
 
 training:
   batch_size: 32
-  learning_rate: 2e-4
+  learning_rate: 0.0002
   weight_decay: 0.00001
   num_epochs: 50
 
@@ -88,6 +88,11 @@ evaluation:
     enabled: true
     beam_width: 3
     max_length: 50
+
+  repetition_penalty:
+    enabled: true
+    penalty: 1.3
+    remove_consecutive: true
 
   temperature: 1.0
   top_k: 0

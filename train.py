@@ -309,7 +309,103 @@ def train_epoch(
     return total_loss / len(train_loader)
 
 
-def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
+def apply_repetition_penalty(logits, generated_tokens, penalty=1.2):
+    """Apply repetition penalty to logits to reduce repetitive generation"""
+    if len(generated_tokens) == 0:
+        return logits
+
+    # Count occurrences of each token
+    token_counts = {}
+    for token in generated_tokens:
+        token_counts[token] = token_counts.get(token, 0) + 1
+
+    # Apply penalty
+    for token, count in token_counts.items():
+        if token < logits.size(-1):  # Ensure token is in vocab
+            logits[token] = logits[token] / (penalty**count)
+
+    return logits
+
+
+def generate_with_repetition_penalty(
+    model, images, word2idx, idx2word, device, max_length=50, penalty=1.2
+):
+    """Generate captions with repetition penalty during validation"""
+    model.eval()
+    batch_size = images.size(0)
+    all_predictions = []
+
+    with torch.no_grad():
+        for i in range(batch_size):
+            image = images[i : i + 1]
+
+            # Encode image
+            encoder_out = model.encoder(image)
+            encoder_dim = encoder_out.size(-1)
+            encoder_out = encoder_out.view(1, -1, encoder_dim)
+
+            # Initialize decoder state
+            h = model.decoder.init_h(encoder_out.mean(dim=1))
+            c = model.decoder.init_c(encoder_out.mean(dim=1))
+
+            # Generate caption
+            generated_tokens = []
+            current_token = word2idx.get("<START>", 1)
+
+            for step in range(max_length):
+                # Get current word embedding
+                current_word = torch.LongTensor([current_token]).to(device)
+                embeddings = model.decoder.embedding(current_word)
+
+                # Attention step
+                attention_weighted_encoding, alpha = model.decoder.attention(
+                    encoder_out, h
+                )
+                gate = model.decoder.sigmoid(model.decoder.f_beta(h))
+                attention_weighted_encoding = gate * attention_weighted_encoding
+
+                # LSTM step
+                h, c = model.decoder.decode_step(
+                    torch.cat([embeddings, attention_weighted_encoding], dim=1), (h, c)
+                )
+
+                # Get logits and apply repetition penalty
+                logits = model.decoder.fc(h).squeeze(0)
+                logits = apply_repetition_penalty(logits, generated_tokens, penalty)
+
+                # Sample next token
+                probs = torch.softmax(logits, dim=0)
+                current_token = torch.multinomial(probs, 1).item()
+
+                if current_token == word2idx.get("<END>", 2):
+                    break
+
+                generated_tokens.append(current_token)
+
+            all_predictions.append(generated_tokens)
+
+    return all_predictions
+
+
+def remove_consecutive_repeats(tokens, word2idx):
+    """Remove consecutive repeated tokens from generated sequence"""
+    if len(tokens) <= 1:
+        return tokens
+
+    pad_idx = word2idx.get("<PAD>", 0)
+    start_idx = word2idx.get("<START>", 1)
+    end_idx = word2idx.get("<END>", 2)
+
+    cleaned = [tokens[0]]
+    for i in range(1, len(tokens)):
+        # Don't remove if it's a special token or different from previous
+        if tokens[i] != tokens[i - 1] or tokens[i] in [pad_idx, start_idx, end_idx]:
+            cleaned.append(tokens[i])
+
+    return cleaned
+
+
+def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx, config):
     model.eval()
     total_loss = 0
     all_predictions = []
@@ -344,9 +440,25 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
             loss = criterion(pred_packed, targets_packed)
             total_loss += loss.item()
 
-            # Get predictions for metrics
-            pred_words = torch.argmax(predictions, dim=-1)
-            all_predictions.extend(pred_words.cpu().numpy())
+            # Generate predictions with repetition penalty for better metrics
+            if config.get("evaluation.repetition_penalty.enabled", True):
+                penalty = config.get("evaluation.repetition_penalty.penalty", 1.3)
+                rep_penalty_preds = generate_with_repetition_penalty(
+                    model, images, word2idx, idx2word, device, penalty=penalty
+                )
+                # Clean up consecutive repeats if enabled
+                if config.get("evaluation.repetition_penalty.remove_consecutive", True):
+                    cleaned_preds = [
+                        remove_consecutive_repeats(pred, word2idx)
+                        for pred in rep_penalty_preds
+                    ]
+                    all_predictions.extend(cleaned_preds)
+                else:
+                    all_predictions.extend(rep_penalty_preds)
+            else:
+                # Use regular argmax predictions
+                pred_words = torch.argmax(predictions, dim=-1)
+                all_predictions.extend(pred_words.cpu().numpy())
 
             all_targets.extend(targets.cpu().numpy())
 
@@ -546,7 +658,7 @@ def main():
             epoch,
         )
         val_loss, bleu_score, meteor_score_val = validate_epoch(
-            model, val_loader, criterion, device, idx2word, word2idx
+            model, val_loader, criterion, device, idx2word, word2idx, config
         )
 
         train_losses.append(train_loss)
