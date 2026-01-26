@@ -64,17 +64,30 @@ training:
   accumulate_grad_batches: 1
   attention_regularization: 0.01
 
+  # Advanced training techniques
+  use_focal_loss: true
+  max_sampling_prob: 0.25
+  curriculum_learning: true
+  token_frequency_weighting: true
+
   early_stopping:
     enabled: true
     patience: 15
     monitor: "val_loss"
-    min_delta: 0.001
+    min_delta: 0.005
     mode: "min"
+    restore_best_weights: true
+    min_epochs: 20
 
   save_checkpoints: true
   checkpoint_dir: "./checkpoints"
   save_every_n_epochs: 5
   save_best_only: true
+
+  # Loss function parameters
+  focal_loss:
+    alpha: 0.25
+    gamma: 2.0
 
 evaluation:
   batch_size: 64

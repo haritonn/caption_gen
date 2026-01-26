@@ -101,7 +101,9 @@ class CaptionDecoder(nn.Module):
         c = self.init_c(mean_encoder_out)
         return h, c
 
-    def forward(self, encoder_out, encoded_captions, caption_lengths):
+    def forward(
+        self, encoder_out, encoded_captions, caption_lengths, sampling_prob=0.0
+    ):
         batch_size = encoder_out.size(0)
         encoder_dim = encoder_out.size(-1)
         vocab_size = self.vocab_size
@@ -129,6 +131,19 @@ class CaptionDecoder(nn.Module):
         )
         for t in range(max(decode_lengths)):
             batch_size_t = sum([length > t for length in decode_lengths])
+
+            if t == 0:
+                word_embeddings = embeddings[:batch_size_t, t, :]
+            else:
+                use_ground_truth = torch.rand(1).item() > sampling_prob
+                if use_ground_truth or not self.training:
+                    word_embeddings = embeddings[:batch_size_t, t, :]
+                else:
+                    prev_word_ids = torch.argmax(
+                        predictions[:batch_size_t, t - 1, :], dim=1
+                    )
+                    word_embeddings = self.embedding(prev_word_ids)
+
             attention_weighted_encoding, alpha = self.attention(
                 encoder_out[:batch_size_t], h[:batch_size_t]
             )
@@ -138,7 +153,7 @@ class CaptionDecoder(nn.Module):
             attention_weighted_encoding = gate * attention_weighted_encoding
             h, c = self.decode_step(
                 torch.cat(
-                    [embeddings[:batch_size_t, t, :], attention_weighted_encoding],
+                    [word_embeddings, attention_weighted_encoding],
                     dim=1,
                 ),
                 (h[:batch_size_t], c[:batch_size_t]),
@@ -170,9 +185,9 @@ class CaptionGenerator(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, images, captions, caption_lengths):
+    def forward(self, images, captions, caption_lengths, sampling_prob=0.0):
         encoder_out = self.encoder(images)
         predictions, encoded_captions, decode_lengths, alphas, sort_ind = self.decoder(
-            encoder_out, captions, caption_lengths
+            encoder_out, captions, caption_lengths, sampling_prob
         )
         return predictions, encoded_captions, decode_lengths, alphas, sort_ind

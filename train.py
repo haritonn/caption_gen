@@ -117,12 +117,31 @@ def setup_model(config, vocab_size, device):
     return model
 
 
-def setup_training_components(config, model, word2idx):
+def focal_loss(inputs, targets, alpha=1.0, gamma=2.0, ignore_index=-100):
+    """Focal loss for addressing class imbalance"""
+    ce_loss = nn.functional.cross_entropy(
+        inputs, targets, ignore_index=ignore_index, reduction="none"
+    )
+    pt = torch.exp(-ce_loss)
+    focal_loss = alpha * (1 - pt) ** gamma * ce_loss
+    return focal_loss.mean()
+
+
+def setup_training_components(config, model, word2idx, word_freq=None):
     pad_idx = word2idx.get("<PAD>", 0)
     label_smoothing = config.get("training.label_smoothing", 0.1)
-    criterion = nn.CrossEntropyLoss(
-        ignore_index=pad_idx, label_smoothing=label_smoothing
-    )
+    use_focal = config.get("training.use_focal_loss", True)
+    if use_focal:
+
+        def criterion(inputs, targets):
+            return focal_loss(
+                inputs, targets, alpha=0.25, gamma=2.0, ignore_index=pad_idx
+            )
+
+    else:
+        criterion = nn.CrossEntropyLoss(
+            ignore_index=pad_idx, label_smoothing=label_smoothing
+        )
 
     lr = config.get("training.learning_rate", 1e-4)
     weight_decay = config.get("training.weight_decay", 1e-4)
@@ -149,6 +168,25 @@ def setup_training_components(config, model, word2idx):
         )
 
     return criterion, optimizer, scheduler
+
+
+def compute_token_weights(word2idx, word_freq, smoothing=0.75):
+    """Compute frequency-based weights for tokens to help with rare words"""
+    vocab_size = len(word2idx)
+    weights = torch.ones(vocab_size)
+
+    total_freq = sum(word_freq.values())
+    for word, idx in word2idx.items():
+        if word in word_freq:
+            freq = word_freq[word]
+            # Inverse frequency weighting with smoothing
+            weight = (total_freq / freq) ** smoothing
+            weights[idx] = weight
+        else:
+            weights[idx] = 1.0
+
+    weights = weights / weights.mean()
+    return weights
 
 
 def calculate_bleu_score(predictions, targets, idx2word, pad_idx, start_idx, end_idx):
@@ -245,10 +283,21 @@ def print_sample_predictions(predictions, targets, idx2word, word2idx, num_sampl
 
 
 def train_epoch(
-    model, train_loader, criterion, optimizer, config, device, clearml_logger, epoch
+    model,
+    train_loader,
+    criterion,
+    optimizer,
+    config,
+    device,
+    clearml_logger,
+    epoch,
+    total_epochs,
 ):
     model.train()
     total_loss = 0
+    sampling_prob = config.get("training.max_sampling_prob", 0.25) * (
+        epoch / total_epochs
+    )
 
     progress_bar = tqdm(train_loader, desc="Training")
     for batch_idx, batch in enumerate(progress_bar):
@@ -259,13 +308,9 @@ def train_epoch(
         optimizer.zero_grad()
 
         predictions, encoded_captions, decode_lengths, alphas, sort_ind = model(
-            images, captions, caption_lengths
+            images, captions, caption_lengths, sampling_prob
         )
-
-        # Calculate loss
         targets = encoded_captions[:, 1:]
-
-        # Pack padded sequences for efficient computation
         predictions = torch.cat(
             [predictions[i, : decode_lengths[i]] for i in range(len(decode_lengths))],
             dim=0,
@@ -276,12 +321,22 @@ def train_epoch(
 
         loss = criterion(predictions, targets)
 
-        # Add L2 regularization on attention weights to prevent repetitive focusing
+        # L2
         if config.get("training.attention_regularization", 0.01) > 0:
             attention_reg = config.get("training.attention_regularization", 0.01)
-            # Encourage diversity in attention weights
             alpha_loss = attention_reg * torch.mean(torch.sum(alphas**2, dim=-1))
             loss = loss + alpha_loss
+
+        # Curriculum learning
+        curriculum_weight = 1.0
+        if config.get("training.curriculum_learning", True):
+            avg_length = sum(decode_lengths) / len(decode_lengths)
+            max_length = max(decode_lengths)
+            difficulty = avg_length / max_length
+            curriculum_weight = min(
+                1.0, 0.5 + (epoch / total_epochs) * 0.5 + difficulty * 0.2
+            )
+            loss = loss * curriculum_weight
 
         loss.backward()
 
@@ -336,43 +391,35 @@ def generate_with_repetition_penalty(
     with torch.no_grad():
         for i in range(batch_size):
             image = images[i : i + 1]
-
-            # Encode image
             encoder_out = model.encoder(image)
             encoder_dim = encoder_out.size(-1)
             encoder_out = encoder_out.view(1, -1, encoder_dim)
 
-            # Initialize decoder state
             h = model.decoder.init_h(encoder_out.mean(dim=1))
             c = model.decoder.init_c(encoder_out.mean(dim=1))
 
-            # Generate caption
             generated_tokens = []
             current_token = word2idx.get("<START>", 1)
 
             for step in range(max_length):
-                # Get current word embedding
                 current_word = torch.LongTensor([current_token]).to(device)
                 embeddings = model.decoder.embedding(current_word)
 
-                # Attention step
                 attention_weighted_encoding, alpha = model.decoder.attention(
                     encoder_out, h
                 )
                 gate = model.decoder.sigmoid(model.decoder.f_beta(h))
                 attention_weighted_encoding = gate * attention_weighted_encoding
 
-                # LSTM step
                 h, c = model.decoder.decode_step(
                     torch.cat([embeddings, attention_weighted_encoding], dim=1), (h, c)
                 )
 
-                # Get logits and apply repetition penalty
                 logits = model.decoder.fc(h).squeeze(0)
                 logits = apply_repetition_penalty(logits, generated_tokens, penalty)
 
-                # Sample next token
                 probs = torch.softmax(logits, dim=0)
+                # selection of value via probs distribution
                 current_token = torch.multinomial(probs, 1).item()
 
                 if current_token == word2idx.get("<END>", 2):
@@ -396,7 +443,6 @@ def remove_consecutive_repeats(tokens, word2idx):
 
     cleaned = [tokens[0]]
     for i in range(1, len(tokens)):
-        # Don't remove if it's a special token or different from previous
         if tokens[i] != tokens[i - 1] or tokens[i] in [pad_idx, start_idx, end_idx]:
             cleaned.append(tokens[i])
 
@@ -419,10 +465,7 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx, con
                 images, captions, caption_lengths
             )
 
-            # Calculate loss
             targets = encoded_captions[:, 1:]
-
-            # Pack padded sequences for efficient computation
             pred_packed = torch.cat(
                 [
                     predictions[i, : decode_lengths[i]]
@@ -439,7 +482,6 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx, con
             total_loss += loss.item()
 
             images_sorted = images[sort_ind]
-            # Generate predictions with repetition penalty for better metrics
             if config.get("evaluation.repetition_penalty.enabled", True):
                 penalty = config.get("evaluation.repetition_penalty.penalty", 1.3)
                 rep_penalty_preds = generate_with_repetition_penalty(
@@ -455,7 +497,6 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx, con
                 else:
                     all_predictions.extend(rep_penalty_preds)
             else:
-                # Use regular argmax predictions
                 pred_words = torch.argmax(predictions, dim=-1)
                 all_predictions.extend(pred_words.cpu().numpy())
 
@@ -618,7 +659,12 @@ def main():
     idx2word = dataset.get_idx2word()
 
     model = setup_model(config, vocab_size, device)
-    criterion, optimizer, scheduler = setup_training_components(config, model, word2idx)
+
+    # Get word frequencies for token weighting
+    word_freq = getattr(dataset, "word_freq", {})
+    criterion, optimizer, scheduler = setup_training_components(
+        config, model, word2idx, word_freq
+    )
 
     if clearml_logger and config.get(
         "hardware.experiment_tracking.log_model_architecture", True
@@ -655,6 +701,7 @@ def main():
             device,
             clearml_logger,
             epoch,
+            num_epochs,
         )
         val_loss, bleu_score, meteor_score_val = validate_epoch(
             model, val_loader, criterion, device, idx2word, word2idx, config
@@ -707,7 +754,8 @@ def main():
                 )
 
         if config.get("training.early_stopping.enabled", True):
-            if patience_counter >= early_stopping_patience:
+            min_epochs = config.get("training.early_stopping.min_epochs", 20)
+            if epoch >= min_epochs and patience_counter >= early_stopping_patience:
                 print(f"Early stopping triggered after {epoch} epochs")
                 break
 
