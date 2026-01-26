@@ -25,18 +25,18 @@ dataset:
 
 model:
   encoder:
-    name: "resnet50"  # Options: resnet50, resnet101, efficientnet_b0, efficientnet_b4
+    name: "resnet50" # Options: resnet50, resnet101, efficientnet_b0, efficientnet_b4
     pretrained: true
     freeze_layers: true
     feature_dim: 2048
-    dropout: 0.5
+    dropout: 0.7
 
   decoder:
     type: "lstm"
     hidden_dim: 512
     num_layers: 2
     embedding_dim: 256
-    dropout: 0.5
+    dropout: 0.7
     attention: true
 
   transformer:
@@ -48,26 +48,27 @@ model:
 
 training:
   batch_size: 32
-  learning_rate: 0.0001
-  weight_decay: 0.0001
+  learning_rate: 0.00005
+  weight_decay: 0.001
   num_epochs: 50
 
   optimizer: "adam"
-  scheduler: "cosine"  # Options: step, cosine, plateau, exponential
+  scheduler: "cosine" # Options: step, cosine, plateau, exponential
   step_size: 10
   gamma: 0.5
 
   loss_function: "cross_entropy"
-  label_smoothing: 0.1
+  label_smoothing: 0.15
 
   gradient_clipping: 5.0
   accumulate_grad_batches: 1
+  attention_regularization: 0.01
 
   early_stopping:
     enabled: true
-    patience: 10
+    patience: 7
     monitor: "val_loss"
-    min_delta: 0.001
+    min_delta: 0.01
     mode: "min"
 
   save_checkpoints: true
@@ -111,7 +112,7 @@ hardware:
     enabled: true
     backend: "clearml"
     project_name: "image_caption_generator"
-    experiment_name: null  # Will use project.experiment_name if null
+    experiment_name: null # Will use project.experiment_name if null
 
   log_every_n_steps: 100
   val_check_interval: 1.0

@@ -119,7 +119,10 @@ def setup_model(config, vocab_size, device):
 
 def setup_training_components(config, model, word2idx):
     pad_idx = word2idx.get("<PAD>", 0)
-    criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
+    label_smoothing = config.get("training.label_smoothing", 0.1)
+    criterion = nn.CrossEntropyLoss(
+        ignore_index=pad_idx, label_smoothing=label_smoothing
+    )
 
     lr = config.get("training.learning_rate", 1e-4)
     weight_decay = config.get("training.weight_decay", 1e-4)
@@ -213,6 +216,87 @@ def calculate_meteor_score(predictions, targets, idx2word, pad_idx, start_idx, e
     return np.mean(meteor_scores) if meteor_scores else 0.0
 
 
+def beam_search_decode(
+    model, images, word2idx, idx2word, device, beam_width=3, max_length=50
+):
+    """Generate captions using beam search for better evaluation"""
+    model.eval()
+    batch_size = images.size(0)
+    all_captions = []
+
+    with torch.no_grad():
+        for i in range(batch_size):
+            image = images[i].unsqueeze(0)
+
+            # Encode image
+            encoder_out = model.encoder(image)
+            encoder_dim = encoder_out.size(-1)
+            encoder_out = encoder_out.view(1, -1, encoder_dim)
+
+            # Initialize decoder
+            h = model.decoder.init_h(encoder_out.mean(dim=1))
+            c = model.decoder.init_c(encoder_out.mean(dim=1))
+
+            # Beam search
+            start_token = word2idx.get("<START>", 1)
+            end_token = word2idx.get("<END>", 2)
+
+            sequences = [[start_token]]
+            scores = [0.0]
+
+            for step in range(max_length):
+                all_candidates = []
+
+                for seq_idx, seq in enumerate(sequences):
+                    if seq[-1] == end_token:
+                        all_candidates.append((seq, scores[seq_idx]))
+                        continue
+
+                    current_word = torch.LongTensor([seq[-1]]).to(device)
+                    embeddings = model.decoder.embedding(current_word)
+
+                    attention_weighted_encoding, _ = model.decoder.attention(
+                        encoder_out, h
+                    )
+                    gate = model.decoder.sigmoid(model.decoder.f_beta(h))
+                    attention_weighted_encoding = gate * attention_weighted_encoding
+
+                    h, c = model.decoder.decode_step(
+                        torch.cat(
+                            [embeddings.squeeze(0), attention_weighted_encoding], dim=1
+                        ),
+                        (h, c),
+                    )
+
+                    preds = model.decoder.fc(h)
+                    probs = torch.softmax(preds, dim=1)
+
+                    top_probs, top_words = torch.topk(probs, beam_width)
+
+                    for j in range(beam_width):
+                        word_idx = top_words[0, j].item()
+                        word_prob = top_probs[0, j].item()
+                        new_seq = seq + [word_idx]
+                        new_score = (
+                            scores[seq_idx] + torch.log(torch.tensor(word_prob)).item()
+                        )
+                        all_candidates.append((new_seq, new_score))
+
+                all_candidates.sort(key=lambda x: x[1], reverse=True)
+                sequences = [candidate[0] for candidate in all_candidates[:beam_width]]
+                scores = [candidate[1] for candidate in all_candidates[:beam_width]]
+
+                if all(seq[-1] == end_token for seq in sequences):
+                    break
+
+            # Get best sequence
+            best_sequence = sequences[0]
+            caption_indices = [idx for idx in best_sequence[1:] if idx != end_token]
+            all_captions.append(caption_indices)
+
+    return all_captions
+
+
 def print_sample_predictions(predictions, targets, idx2word, word2idx, num_samples=3):
     """Print sample predictions for debugging"""
     pad_idx = word2idx.get("<PAD>", 0)
@@ -272,6 +356,13 @@ def train_epoch(
         )
 
         loss = criterion(predictions, targets)
+
+        # Add L2 regularization on attention weights to prevent repetitive focusing
+        if config.get("training.attention_regularization", 0.01) > 0:
+            attention_reg = config.get("training.attention_regularization", 0.01)
+            # Encourage diversity in attention weights
+            alpha_loss = attention_reg * torch.mean(torch.sum(alphas**2, dim=-1))
+            loss = loss + alpha_loss
         loss.backward()
 
         if config.get("training.gradient_clipping", 0) > 0:
@@ -298,7 +389,9 @@ def train_epoch(
     return total_loss / len(train_loader)
 
 
-def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
+def validate_epoch(
+    model, val_loader, criterion, device, idx2word, word2idx, use_beam_search=False
+):
     model.eval()
     total_loss = 0
     all_predictions = []
@@ -314,7 +407,10 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
                 images, captions, caption_lengths
             )
 
+            # Calculate loss
             targets = encoded_captions[:, 1:]
+
+            # Pack padded sequences for efficient computation
             pred_packed = torch.cat(
                 [
                     predictions[i, : decode_lengths[i]]
@@ -330,8 +426,16 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
             loss = criterion(pred_packed, targets_packed)
             total_loss += loss.item()
 
-            pred_words = torch.argmax(predictions, dim=-1)
-            all_predictions.extend(pred_words.cpu().numpy())
+            # Get predictions for metrics - use beam search if enabled
+            if use_beam_search:
+                beam_predictions = beam_search_decode(
+                    model, images, word2idx, idx2word, device
+                )
+                all_predictions.extend(beam_predictions)
+            else:
+                pred_words = torch.argmax(predictions, dim=-1)
+                all_predictions.extend(pred_words.cpu().numpy())
+
             all_targets.extend(targets.cpu().numpy())
 
     avg_loss = total_loss / len(val_loader)
@@ -340,6 +444,7 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
     start_idx = word2idx.get("<START>", 1)
     end_idx = word2idx.get("<END>", 2)
 
+    # Print sample predictions for debugging
     if len(all_predictions) > 0:
         print_sample_predictions(all_predictions, all_targets, idx2word, word2idx)
 
@@ -528,8 +633,10 @@ def main():
             clearml_logger,
             epoch,
         )
+        # Use beam search every 5 epochs for better metrics evaluation
+        use_beam_search = epoch % 5 == 0
         val_loss, bleu_score, meteor_score_val = validate_epoch(
-            model, val_loader, criterion, device, idx2word, word2idx
+            model, val_loader, criterion, device, idx2word, word2idx, use_beam_search
         )
 
         train_losses.append(train_loss)
