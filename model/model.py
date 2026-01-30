@@ -60,7 +60,7 @@ class CaptionDecoder(nn.Module):
         decoder_dim,
         vocab_size,
         encoder_dim=2048,
-        dropout=0.5,
+        dropout=0.3,
     ):
         super(CaptionDecoder, self).__init__()
 
@@ -81,12 +81,16 @@ class CaptionDecoder(nn.Module):
         self.f_beta = nn.Linear(decoder_dim, encoder_dim)
         self.sigmoid = nn.Sigmoid()
         self.fc = nn.Linear(decoder_dim, vocab_size)
+        self.layer_norm = nn.LayerNorm(embed_dim + encoder_dim)
         self.init_weights()
 
     def init_weights(self):
-        self.embedding.weight.data.uniform_(-0.1, 0.1)
-        self.fc.bias.data.fill_(0)
-        self.fc.weight.data.uniform_(-0.1, 0.1)
+        nn.init.xavier_uniform_(self.embedding.weight)
+        nn.init.kaiming_normal_(self.fc.weight, mode="fan_in", nonlinearity="relu")
+        nn.init.constant_(self.fc.bias, 0)
+
+        nn.init.xavier_uniform_(self.f_beta.weight)
+        nn.init.constant_(self.f_beta.bias, 0)
 
     def load_pretrained_embeddings(self, embeddings):
         self.embedding.weight = nn.Parameter(embeddings)
@@ -108,27 +112,24 @@ class CaptionDecoder(nn.Module):
         encoder_dim = encoder_out.size(-1)
         vocab_size = self.vocab_size
 
-        encoder_out = encoder_out.view(
-            batch_size, -1, encoder_dim
-        )  # [batch_size, num_pixels, encoder_dim]
+        encoder_out = encoder_out.view(batch_size, -1, encoder_dim)
         num_pixels = encoder_out.size(1)
 
         caption_lengths, sort_ind = caption_lengths.sort(dim=0, descending=True)
         encoder_out = encoder_out[sort_ind]
         encoded_captions = encoded_captions[sort_ind]
 
-        embeddings = self.embedding(
-            encoded_captions
-        )  # [batch_size, max_caption_length, embed_dim]
-
-        h, c = self.init_hidden_state(encoder_out)  # [batch_size, decoder_dim]
+        embeddings = self.embedding(encoded_captions)
+        h, c = self.init_hidden_state(encoder_out)
         decode_lengths = (caption_lengths - 1).tolist()
+
         predictions = torch.zeros(batch_size, max(decode_lengths), vocab_size).to(
             encoder_out.device
         )
         alphas = torch.zeros(batch_size, max(decode_lengths), num_pixels).to(
             encoder_out.device
         )
+
         for t in range(max(decode_lengths)):
             batch_size_t = sum([length > t for length in decode_lengths])
 
@@ -147,20 +148,25 @@ class CaptionDecoder(nn.Module):
             attention_weighted_encoding, alpha = self.attention(
                 encoder_out[:batch_size_t], h[:batch_size_t]
             )
-            gate = self.sigmoid(
-                self.f_beta(h[:batch_size_t])
-            )  # gating scalar, [batch_size_t, encoder_dim]
+            gate = self.sigmoid(self.f_beta(h[:batch_size_t]))
             attention_weighted_encoding = gate * attention_weighted_encoding
+
+            lstm_input = torch.cat(
+                [word_embeddings, attention_weighted_encoding], dim=1
+            )
+            lstm_input = self.layer_norm(lstm_input)
             h, c = self.decode_step(
-                torch.cat(
-                    [word_embeddings, attention_weighted_encoding],
-                    dim=1,
-                ),
+                lstm_input,
                 (h[:batch_size_t], c[:batch_size_t]),
-            )  # [batch_size_t, decoder_dim]
-            preds = self.fc(self.dropout_layer(h))  # [batch_size_t, vocab_size]
+            )
+            preds = self.fc(self.dropout_layer(h))
             predictions[:batch_size_t, t, :] = preds
             alphas[:batch_size_t, t, :] = alpha
+
+        _, unsort_ind = sort_ind.sort(0)
+        predictions = predictions[unsort_ind]
+        encoded_captions = encoded_captions[unsort_ind]
+        alphas = alphas[unsort_ind]
 
         return predictions, encoded_captions, decode_lengths, alphas, sort_ind
 
@@ -173,7 +179,7 @@ class CaptionGenerator(nn.Module):
         hidden_dim,
         num_layers,
         attention_dim=512,
-        dropout=0.5,
+        dropout=0.3,
     ):
         super(CaptionGenerator, self).__init__()
         self.encoder = CaptionEncoder()

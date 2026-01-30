@@ -107,6 +107,7 @@ dependencies = [
     "psutil==7.2.1",
     "ptyprocess==0.7.0",
     "pure-eval==0.2.3",
+    "pycocoevalcap>=1.2",
     "pycparser==2.23",
     "pygments==2.19.2",
     "pyjwt==2.10.1",
