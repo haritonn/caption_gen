@@ -8,7 +8,7 @@ dataset:
   test_size: 0.1
 
   max_caption_length: 50
-  min_word_freq: 5
+  min_word_freq: 2
   remove_stopwords: false
 
   image_size: 224
@@ -16,8 +16,8 @@ dataset:
   normalize_std: [0.2235, 0.2138, 0.2222]
 
   augmentation:
-    random_horizontal_flip: 0.5
-    random_rotation: 0
+    random_horizontal_flip: 0.3
+    random_rotation: 0.1
     random_brightness: 0.2
     random_contrast: 0.2
     random_saturation: 0
@@ -29,14 +29,14 @@ model:
     pretrained: true
     freeze_layers: true
     feature_dim: 2048
-    dropout: 0.7
+    dropout: 0.3
 
   decoder:
     type: "lstm"
     hidden_dim: 512
     num_layers: 2
     embedding_dim: 256
-    dropout: 0.5
+    dropout: 0.3
     attention: true
 
   transformer:
@@ -47,14 +47,14 @@ model:
     max_seq_length: 100
 
 training:
-  batch_size: 32
+  batch_size: 128
   learning_rate: 0.0002
   weight_decay: 0.00001
-  num_epochs: 50
+  num_epochs: 100
 
   optimizer: "adam"
   scheduler: "plateau" # Options: step, cosine, plateau, exponential
-  step_size: 10
+  step_size: 25
   gamma: 0.5
 
   loss_function: "cross_entropy"
@@ -66,18 +66,18 @@ training:
 
   # Advanced training techniques
   use_focal_loss: false
-  max_sampling_prob: 0.5
+  max_sampling_prob: 0.35
   curriculum_learning: false
   token_frequency_weighting: true
 
   early_stopping:
     enabled: true
-    patience: 15
+    patience: 20
     monitor: "val_loss"
-    min_delta: 0.005
+    min_delta: 0.001
     mode: "min"
     restore_best_weights: true
-    min_epochs: 20
+    min_epochs: 30
 
   save_checkpoints: true
   checkpoint_dir: "./checkpoints"
@@ -90,16 +90,16 @@ training:
     gamma: 2.0
 
 evaluation:
-  batch_size: 64
-  num_workers: 4
+  batch_size: 256
+  num_workers: 16
 
   metrics:
     bleu: true
     meteor: true
 
   beam_search:
-    enabled: true
-    beam_width: 3
+    enabled: false
+    beam_width: 5
     max_length: 50
 
   repetition_penalty:
@@ -115,7 +115,7 @@ evaluation:
 
 hardware:
   device: "cuda"
-  num_workers: 4
+  num_workers: 16
   pin_memory: true
   persistent_workers: true
 
@@ -139,7 +139,7 @@ hardware:
 
 data_loading:
   batch_size: 32
-  num_workers: 4
+  num_workers: 16
   shuffle: true
   drop_last: true
   pin_memory: true
@@ -149,7 +149,7 @@ data_loading:
   max_length: 50
   temperature: 1.0
   do_sample: false
-  num_beams: 3
+  num_beams: 5
   early_stopping: true
 
   remove_special_tokens: true
