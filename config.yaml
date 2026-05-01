@@ -1,6 +1,6 @@
 dataset:
   data_path: "./data"
-  images_path: "images"
+  images_path: "Images"
   captions_file: "captions.txt"
   train_size: 0.8
   val_size: 0.1
@@ -14,6 +14,8 @@ dataset:
     random_horizontal_flip: 0.3
 
 model:
+  encoder:
+    pretrained: false
   decoder:
     embedding_dim: 256
     hidden_dim: 512

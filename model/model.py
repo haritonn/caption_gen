@@ -22,9 +22,10 @@ class Attention(nn.Module):
 
 
 class CaptionEncoder(nn.Module):
-    def __init__(self, encoded_image_size=7):
+    def __init__(self, encoded_image_size=7, pretrained=False):
         super().__init__()
-        resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+        weights = models.ResNet50_Weights.IMAGENET1K_V1 if pretrained else None
+        resnet = models.resnet50(weights=weights)
         self.resnet = nn.Sequential(*list(resnet.children())[:-2])
         self.adaptive_pool = nn.AdaptiveAvgPool2d(
             (encoded_image_size, encoded_image_size)
@@ -132,10 +133,16 @@ class CaptionDecoder(nn.Module):
 
 class CaptionGenerator(nn.Module):
     def __init__(
-        self, vocab_size, embedding_dim, hidden_dim, attention_dim=512, dropout=0.3
+        self,
+        vocab_size,
+        embedding_dim,
+        hidden_dim,
+        attention_dim=512,
+        dropout=0.3,
+        encoder_pretrained=False,
     ):
         super().__init__()
-        self.encoder = CaptionEncoder()
+        self.encoder = CaptionEncoder(pretrained=encoder_pretrained)
         self.decoder = CaptionDecoder(
             attention_dim=attention_dim,
             embed_dim=embedding_dim,

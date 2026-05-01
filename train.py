@@ -22,8 +22,6 @@ warnings.filterwarnings("ignore")
 
 def ensure_nltk_resources():
     resources = {
-        "tokenizers/punkt": "punkt",
-        "corpora/stopwords": "stopwords",
         "corpora/wordnet": "wordnet",
     }
 
@@ -31,7 +29,10 @@ def ensure_nltk_resources():
         try:
             nltk.data.find(resource_path)
         except LookupError:
-            nltk.download(resource_name, quiet=True)
+            try:
+                nltk.download(resource_name, quiet=True)
+            except Exception:
+                print(f"Warning: failed to download NLTK resource '{resource_name}'.")
 
 
 ensure_nltk_resources()
@@ -132,6 +133,7 @@ def setup_model(config, vocab_size, device):
         vocab_size=vocab_size,
         embedding_dim=config.get("model.decoder.embedding_dim", 256),
         hidden_dim=config.get("model.decoder.hidden_dim", 512),
+        encoder_pretrained=config.get("model.encoder.pretrained", False),
     ).to(device)
     return model
 

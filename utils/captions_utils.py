@@ -1,25 +1,20 @@
 import re
 from collections import Counter
 
-import nltk
 from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import wordpunct_tokenize
 
 from config_loader import get_config
 
 
-for resource_path, resource_name in (
-    ("tokenizers/punkt", "punkt"),
-    ("corpora/stopwords", "stopwords"),
-):
-    try:
-        nltk.data.find(resource_path)
-    except LookupError:
-        nltk.download(resource_name, quiet=True)
+try:
+    DEFAULT_STOPWORDS = set(stopwords.words("english"))
+except LookupError:
+    DEFAULT_STOPWORDS = set()
 
 
 class CaptionsPreprocessing:
-    STOPWORDS = set(stopwords.words("english"))
+    STOPWORDS = DEFAULT_STOPWORDS
 
     @staticmethod
     def preprocess_text(captions):
@@ -35,8 +30,8 @@ class CaptionsPreprocessing:
     def tokenize_captions(captions, remove_stopwords=True):
         result = []
         for caption in captions:
-            tokens = word_tokenize(caption)
-            if remove_stopwords:
+            tokens = wordpunct_tokenize(caption)
+            if remove_stopwords and CaptionsPreprocessing.STOPWORDS:
                 tokens = [token for token in tokens if token not in CaptionsPreprocessing.STOPWORDS]
             result.append(" ".join(tokens))
         return result
