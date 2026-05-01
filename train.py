@@ -7,7 +7,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from clearml import Task
+try:
+    from clearml import Task
+except ImportError:
+    Task = None
 from nltk.translate.bleu_score import SmoothingFunction, corpus_bleu
 from nltk.translate.meteor_score import meteor_score
 from torch.utils.data import DataLoader

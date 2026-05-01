@@ -50,7 +50,7 @@ hardware:
   num_workers: 16
   pin_memory: true
   experiment_tracking:
-    enabled: true
+    enabled: false
     project_name: "image_caption_generator"
     experiment_name: null
     log_hyperparameters: true
