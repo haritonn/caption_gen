@@ -6,89 +6,61 @@ import yaml
 
 class ConfigLoader:
     def __init__(self, config_path: Optional[str] = None):
-        if config_path is None:
-            current_dir = Path.cwd()
-            possible_paths = [
-                current_dir / "config.yaml",
-                current_dir.parent / "config.yaml",
-                Path(__file__).parent / "config.yaml",
-                Path(__file__).parent.parent / "config.yaml",
-            ]
-
-            config_path = None
-            for path in possible_paths:
-                if path.exists():
-                    config_path = str(path)
-                    break
-
-            if config_path is None:
-                raise FileNotFoundError(
-                    "config.yaml not found in any of the expected locations"
-                )
-
-        self.config_path = config_path
+        self.config_path = config_path or self._find_default_config_path()
         self.config = self._load_config()
 
-    def _load_config(self) -> Dict[str, Any]:
-        # if no CUDA, replacing default device to 'cpu' (mostly for CI)
-        try:
-            with open(self.config_path, "r") as file:
-                config = yaml.safe_load(file)
-            if "hardware" in config and config["hardware"].get("device") == "cuda":
-                try:
-                    import torch
+    def _find_default_config_path(self) -> str:
+        current_dir = Path.cwd()
+        possible_paths = [
+            current_dir / "config.yaml",
+            current_dir.parent / "config.yaml",
+            Path(__file__).parent / "config.yaml",
+            Path(__file__).parent.parent / "config.yaml",
+        ]
 
-                    if not torch.cuda.is_available():
-                        config["hardware"]["device"] = "cpu"
-                        config["hardware"]["mixed_precision"] = False
-                except ImportError:
-                    pass
-            return config
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
-        except yaml.YAMLError as e:
-            raise ValueError(f"Error parsing YAML configuration: {e}")
+        for path in possible_paths:
+            if path.exists():
+                return str(path)
+
+        raise FileNotFoundError(
+            "config.yaml not found in any of the expected locations"
+        )
+
+    def _load_config(self) -> Dict[str, Any]:
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as file:
+                config = yaml.safe_load(file)
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                f"Configuration file not found: {self.config_path}"
+            ) from error
+        except yaml.YAMLError as error:
+            raise ValueError(f"Error parsing YAML configuration: {error}") from error
+
+        if config.get("hardware", {}).get("device") == "cuda":
+            try:
+                import torch
+
+                if not torch.cuda.is_available():
+                    config["hardware"]["device"] = "cpu"
+            except ImportError:
+                pass
+
+        return config
 
     def get_config(self) -> Dict[str, Any]:
         return self.config
 
-    def get_project_config(self) -> Dict[str, Any]:
-        return self.config.get("project", {})
-
     def get_dataset_config(self) -> Dict[str, Any]:
         return self.config.get("dataset", {})
 
-    def get_model_config(self) -> Dict[str, Any]:
-        return self.config.get("model", {})
-
-    def get_training_config(self) -> Dict[str, Any]:
-        return self.config.get("training", {})
-
-    def get_evaluation_config(self) -> Dict[str, Any]:
-        return self.config.get("evaluation", {})
-
-    def get_hardware_config(self) -> Dict[str, Any]:
-        return self.config.get("hardware", {})
-
-    def get_data_loading_config(self) -> Dict[str, Any]:
-        return self.config.get("data_loading", {})
-
-    def get_reproducibility_config(self) -> Dict[str, Any]:
-        return self.config.get("reproducibility", {})
-
-    def get_paths_config(self) -> Dict[str, Any]:
-        return self.config.get("paths", {})
-
     def get(self, key: str, default: Any = None) -> Any:
-        keys = key.split(".")
-        value = self.config
-
-        for k in keys:
-            if isinstance(value, dict) and k in value:
-                value = value[k]
+        value: Any = self.config
+        for part in key.split("."):
+            if isinstance(value, dict) and part in value:
+                value = value[part]
             else:
                 return default
-
         return value
 
 
@@ -99,10 +71,4 @@ def get_config(config_path: Optional[str] = None) -> ConfigLoader:
     global _config_loader
     if _config_loader is None or config_path is not None:
         _config_loader = ConfigLoader(config_path)
-    return _config_loader
-
-
-def reload_config(config_path: Optional[str] = None):
-    global _config_loader
-    _config_loader = ConfigLoader(config_path)
     return _config_loader
