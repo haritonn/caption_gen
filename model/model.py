@@ -163,11 +163,6 @@ class CaptionDecoder(nn.Module):
             predictions[:batch_size_t, t, :] = preds
             alphas[:batch_size_t, t, :] = alpha
 
-        _, unsort_ind = sort_ind.sort(0)
-        predictions = predictions[unsort_ind]
-        encoded_captions = encoded_captions[unsort_ind]
-        alphas = alphas[unsort_ind]
-
         return predictions, encoded_captions, decode_lengths, alphas, sort_ind
 
 
