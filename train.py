@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
 try:
     from clearml import Task
 except ImportError:
@@ -17,7 +18,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from config_loader import get_config
-from dataset.dataset import FlickrDataset, collate_fn, split_image_names
+from dataset.dataset import (
+    FlickrDataset,
+    FlickrMetricsDataset,
+    collate_fn,
+    metrics_collate_fn,
+    split_image_names,
+)
 from model.model import CaptionGenerator
 
 warnings.filterwarnings("ignore")
@@ -96,6 +103,12 @@ def setup_data(config):
         word2idx=train_dataset.word2idx,
         word_freq=train_dataset.word_freq,
     )
+    metrics_dataset = FlickrMetricsDataset(
+        is_train=False,
+        allowed_images=val_images,
+        word2idx=train_dataset.word2idx,
+        word_freq=train_dataset.word_freq,
+    )
 
     assert set(train_images).isdisjoint(val_images)
     assert set(train_images).isdisjoint(test_images)
@@ -120,6 +133,14 @@ def setup_data(config):
         collate_fn=collate_fn,
         pin_memory=pin_memory,
     )
+    metrics_loader = DataLoader(
+        metrics_dataset,
+        batch_size=config.get("evaluation.batch_size", 64),
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=metrics_collate_fn,
+        pin_memory=pin_memory,
+    )
 
     print(
         "Dataset split by images:",
@@ -128,7 +149,7 @@ def setup_data(config):
         f"test={len(test_images)} images",
     )
 
-    return train_loader, val_loader, train_dataset
+    return train_loader, val_loader, train_dataset, metrics_loader
 
 
 def setup_model(config, vocab_size, device):
@@ -202,29 +223,20 @@ def setup_training_components(config, model, word2idx):
     return criterion, optimizer, scheduler
 
 
-def calculate_bleu_score(predictions, targets, idx2word, pad_idx, start_idx, end_idx):
+def calculate_bleu_score(
+    predictions, reference_groups, idx2word, pad_idx, start_idx, end_idx
+):
     references = []
     candidates = []
 
-    for pred, target in zip(predictions, targets):
-        pred_words = [
-            idx2word.get(idx, "<UNK>")
-            for idx in pred
-            if idx not in [pad_idx, start_idx]
-        ]
-        target_words = [
-            idx2word.get(idx, "<UNK>")
-            for idx in target
-            if idx not in [pad_idx, start_idx]
-        ]
-
-        if end_idx in pred:
-            pred_words = pred_words[: list(pred).index(end_idx)]
-        if end_idx in target:
-            target_words = target_words[: list(target).index(end_idx)]
-
-        candidates.append(pred_words)
-        references.append([target_words])
+    for pred, reference_group in zip(predictions, reference_groups):
+        candidates.append(tokens_to_words(pred, idx2word, pad_idx, start_idx, end_idx))
+        references.append(
+            [
+                tokens_to_words(reference, idx2word, pad_idx, start_idx, end_idx)
+                for reference in reference_group
+            ]
+        )
 
     return corpus_bleu(
         references,
@@ -233,29 +245,20 @@ def calculate_bleu_score(predictions, targets, idx2word, pad_idx, start_idx, end
     )
 
 
-def calculate_meteor_score(predictions, targets, idx2word, pad_idx, start_idx, end_idx):
+def calculate_meteor_score(
+    predictions, reference_groups, idx2word, pad_idx, start_idx, end_idx
+):
     scores = []
 
-    for pred, target in zip(predictions, targets):
-        pred_words = [
-            idx2word.get(idx, "<UNK>")
-            for idx in pred
-            if idx not in [pad_idx, start_idx]
+    for pred, reference_group in zip(predictions, reference_groups):
+        pred_words = tokens_to_words(pred, idx2word, pad_idx, start_idx, end_idx)
+        reference_words = [
+            tokens_to_words(reference, idx2word, pad_idx, start_idx, end_idx)
+            for reference in reference_group
         ]
-        target_words = [
-            idx2word.get(idx, "<UNK>")
-            for idx in target
-            if idx not in [pad_idx, start_idx]
-        ]
-
-        if end_idx in pred:
-            pred_words = pred_words[: list(pred).index(end_idx)]
-        if end_idx in target:
-            target_words = target_words[: list(target).index(end_idx)]
-
-        if pred_words and target_words:
+        if pred_words and reference_words:
             try:
-                scores.append(meteor_score([target_words], pred_words))
+                scores.append(meteor_score(reference_words, pred_words))
             except Exception:
                 pass
 
@@ -359,11 +362,23 @@ def train_epoch(
     return total_loss / len(train_loader)
 
 
-def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
+def tokens_to_words(token_ids, idx2word, pad_idx, start_idx, end_idx):
+    words = []
+
+    for token_id in token_ids:
+        if token_id == end_idx:
+            break
+        if token_id in (pad_idx, start_idx):
+            continue
+        word = idx2word.get(token_id, "<UNK>")
+        words.append(word)
+
+    return words
+
+
+def validate_epoch(model, val_loader, criterion, device):
     model.eval()
     total_loss = 0.0
-    all_predictions = []
-    all_targets = []
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation"):
@@ -371,7 +386,7 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
             captions = batch["captions"].to(device)
             caption_lengths = batch["caption_lengths"].to(device)
 
-            predictions, encoded_captions, decode_lengths, _, sort_ind = model(
+            predictions, encoded_captions, decode_lengths, _, _ = model(
                 images,
                 captions,
                 caption_lengths,
@@ -392,26 +407,37 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
 
             total_loss += criterion(pred_packed, targets_packed).item()
 
-            pred_words = torch.argmax(predictions, dim=-1)
-            pred_words_restored = pred_words.new_zeros(pred_words.shape)
-            pred_words_restored[sort_ind] = pred_words
-            all_predictions.extend(pred_words_restored.cpu().numpy())
+    return total_loss / len(val_loader)
 
-            targets_restored = targets.new_zeros(targets.shape)
-            targets_restored[sort_ind] = targets
-            all_targets.extend(targets_restored.cpu().numpy())
 
-    avg_loss = total_loss / len(val_loader)
+def evaluate_generation(model, metrics_loader, device, idx2word, word2idx, max_length):
+    model.eval()
     pad_idx = word2idx.get("<PAD>", 0)
     start_idx = word2idx.get("<START>", 1)
     end_idx = word2idx.get("<END>", 2)
+    all_predictions = []
+    all_reference_groups = []
+
+    with torch.inference_mode():
+        for batch in tqdm(metrics_loader, desc="Generation metrics"):
+            images = batch["images"].to(device)
+            generated_tokens = model.generate(
+                images,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                max_length=max_length,
+            )
+
+            all_predictions.extend(generated_tokens.cpu().tolist())
+            all_reference_groups.extend(batch["references"])
 
     if all_predictions:
-        print_sample_predictions(all_predictions, all_targets, idx2word, word2idx)
+        sample_targets = [references[0] for references in all_reference_groups]
+        print_sample_predictions(all_predictions, sample_targets, idx2word, word2idx)
 
     bleu_score = calculate_bleu_score(
         all_predictions,
-        all_targets,
+        all_reference_groups,
         idx2word,
         pad_idx,
         start_idx,
@@ -419,14 +445,14 @@ def validate_epoch(model, val_loader, criterion, device, idx2word, word2idx):
     )
     meteor_score_val = calculate_meteor_score(
         all_predictions,
-        all_targets,
+        all_reference_groups,
         idx2word,
         pad_idx,
         start_idx,
         end_idx,
     )
 
-    return avg_loss, bleu_score, meteor_score_val
+    return bleu_score, meteor_score_val
 
 
 def save_checkpoint(
@@ -469,7 +495,7 @@ def main():
 
     setup_reproducibility(config)
     clearml_logger, _ = setup_clearml(config)
-    train_loader, val_loader, dataset = setup_data(config)
+    train_loader, val_loader, dataset, metrics_loader = setup_data(config)
 
     vocab_size = dataset.get_vocab_size()
     word2idx = dataset.get_word2idx()
@@ -514,13 +540,19 @@ def main():
             clearml_logger,
             epoch,
         )
-        val_loss, bleu_score, meteor_score_val = validate_epoch(
+        val_loss = validate_epoch(
             model,
             val_loader,
             criterion,
             device,
+        )
+        bleu_score, meteor_score_val = evaluate_generation(
+            model,
+            metrics_loader,
+            device,
             idx2word,
             word2idx,
+            max_length=config.get("dataset.max_caption_length", 50) - 1,
         )
 
         train_losses.append(train_loss)

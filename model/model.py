@@ -71,6 +71,54 @@ class CaptionDecoder(nn.Module):
         nn.init.xavier_uniform_(self.f_beta.weight)
         nn.init.constant_(self.f_beta.bias, 0)
 
+    @torch.inference_mode()
+    def generate(self, encoder_out, start_idx, end_idx, max_length):
+        batch_size = encoder_out.size(0)
+        encoder_dim = encoder_out.size(-1)
+
+        encoder_out = encoder_out.view(batch_size, -1, encoder_dim)
+        h, c = self.init_hidden_state(encoder_out)
+
+        previous_token = torch.full(
+            (batch_size,),
+            start_idx,
+            dtype=torch.long,
+            device=encoder_out.device,
+        )
+        generated_tokens = []
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=encoder_out.device)
+
+        for _ in range(max_length):
+            word_embeddings = self.embedding(previous_token)
+            attention_weighted_encoding, _ = self.attention(encoder_out, h)
+            gate = self.sigmoid(self.f_beta(h))
+            attention_weighted_encoding = gate * attention_weighted_encoding
+
+            lstm_input = torch.cat(
+                [word_embeddings, attention_weighted_encoding], dim=1
+            )
+            lstm_input = self.layer_norm(lstm_input)
+
+            h, c = self.decode_step(lstm_input, (h, c))
+            logits = self.fc(h)
+
+            next_tokens = torch.argmax(logits, dim=1)
+
+            next_tokens = torch.where(
+                finished,
+                torch.full_like(next_tokens, end_idx),
+                next_tokens,
+            )
+
+            generated_tokens.append(next_tokens)
+            finished |= next_tokens.eq(end_idx)
+            previous_token = next_tokens
+
+            if finished.all():
+                break
+
+        return torch.stack(generated_tokens, dim=1)
+
     def init_hidden_state(self, encoder_out):
         mean_encoder_out = encoder_out.mean(dim=1)
         return self.init_h(mean_encoder_out), self.init_c(mean_encoder_out)
@@ -149,6 +197,14 @@ class CaptionGenerator(nn.Module):
             decoder_dim=hidden_dim,
             vocab_size=vocab_size,
             dropout=dropout,
+        )
+
+    @torch.inference_mode()
+    def generate(self, images, start_idx, end_idx, max_length):
+        encoder_out = self.encoder(images)
+
+        return self.decoder.generate(
+            encoder_out, start_idx=start_idx, end_idx=end_idx, max_length=max_length
         )
 
     def forward(self, images, captions, caption_lengths, sampling_prob=0.0):

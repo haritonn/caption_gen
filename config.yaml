@@ -15,7 +15,7 @@ dataset:
 
 model:
   encoder:
-    pretrained: false
+    pretrained: true
   decoder:
     embedding_dim: 256
     hidden_dim: 512

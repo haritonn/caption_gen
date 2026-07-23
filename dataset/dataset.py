@@ -177,3 +177,28 @@ def collate_fn(batch):
             dtype=torch.long,
         ),
     }
+
+
+class FlickrMetricsDataset(FlickrDataset):
+    def _create_items(self):
+        self.dataset_items = [
+            (image_name, captions)
+            for image_name, captions in self.processed_image_captions.items()
+        ]
+
+    def __getitem__(self, idx):
+        image_name, captions = self.dataset_items[idx]
+        image = get_image_by_name(
+            self.data_path, self.images_path, image_name, transform=self.transform
+        )
+
+        references = [self._caption_to_indices(caption) for caption in captions]
+
+        return {"image": image, "references": references}
+
+
+def metrics_collate_fn(batch):
+    return {
+        "images": torch.stack([item["image"] for item in batch]),
+        "references": [item["references"] for item in batch],
+    }
